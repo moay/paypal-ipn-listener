@@ -2,36 +2,44 @@
 
 namespace PayPal\Ipn;
 
-class VerificationResponse
+class Response
 {
     /**
-     * Verification response body.
+     * The response body
      *
      * @var string
      */
     protected $body;
 
     /**
-     * Verification response status code.
+     * The response HTTP status code
      *
-     * @var integer
+     * @var int
      */
     protected $statusCode;
 
     /**
-     * Create a new instance of the verification response.
+     * Sets the response body
      *
-     * @param string  $body
-     * @param integer $statusCode
+     * @param string $body
      */
-    public function __construct($body, $statusCode)
+    public function setBody($body)
     {
         $this->body = $body;
+    }
+
+    /**
+     * Sets the response HTTP status code
+     *
+     * @param int $status
+     */
+    public function setStatusCode($statusCode)
+    {
         $this->statusCode = (int) $statusCode;
     }
 
     /**
-     * Get the verification response body.
+     * Get the response body
      *
      * @return string
      */
@@ -41,9 +49,9 @@ class VerificationResponse
     }
 
     /**
-     * Get the verification response status code.
+     * Get the response status code
      *
-     * @return integer
+     * @return int|string
      */
     public function getStatusCode()
     {

@@ -2,133 +2,81 @@
 
 namespace PayPal\Ipn;
 
-use RuntimeException;
-use Closure;
+use PayPal\Ipn\Exception\UnexpectedResponseBodyException;
+use PayPal\Ipn\Exception\UnexpectedResponseStatusException;
 
 class Listener
 {
     /**
-     * Verifier instance.
+     * Request object to be used to make the request to PayPal
      *
-     * @var Verifier
+     * @var object
      */
-    protected $verifier = null;
+    protected $request;
 
     /**
-     * Verified IPN callback stack.
+     * Create a new instance
      *
-     * @var array
+     * @param object $request Request object to be used to make the request to PayPal
+     * @param string $mode    Can either be 'production' or 'sandbox'. Defaults to 'production'
      */
-    protected $verifiedIpnCallbackStack = array();
-
-    /**
-     * Invalid IPN callback stack.
-     *
-     * @var array
-     */
-    protected $invalidIpnCallbackStack = array();
-
-    /**
-     * Get the verifier instance.
-     *
-     * @return Verifier
-     */
-    public function getVerifier()
+    public function __construct($request, $mode = 'production')
     {
-        return $this->verifier;
+        $this->request = $request;
+        $this->setMode($mode);
     }
 
     /**
-     * Set the verifier instance.
+     * Set mode to use for communicating with PayPal. Can either be 'production' or 'sandbox'. Defaults to 'production'
      *
-     * @param Verifier $verifier
+     * @param string $mode
      */
-    public function setVerifier(Verifier $verifier)
+    public function setMode($mode)
     {
-        $this->verifier = $verifier;
+        $this->request->setHost($mode);
     }
 
     /**
-     * Set a callback to be executed when the IPN is verified.
+     * Verify the IPN message with PayPal
      *
-     * @param  Closure $callback
-     * @return void
+     * @return bool
+     * @throws UnexpectedResponseBodyException
+     * @throws UnexpectedResponseStatusException
      */
-    public function onVerifiedIpn(Closure $callback)
+    public function verifyIpn()
     {
-        $this->verifiedIpnCallbackStack[] = $callback;
-    }
+        // cache the request object
+        $request =& $this->request;
 
-    /**
-     * Set a callback to be executed when the IPN is invalid.
-     *
-     * @param  Closure $callback
-     * @return void
-     */
-    public function onInvalidIpn(Closure $callback)
-    {
-        $this->invalidIpnCallbackStack[] = $callback;
-    }
+        // send the request
+        $request->send();
 
-    /**
-     * Verify the IPN.
-     *
-     * @param  boolean          $executeCallbacks
-     * @return boolean
-     * @throws RuntimeException
-     */
-    public function processIpn($executeCallbacks = true)
-    {
-        // make sure a verifier has been set
-        if (is_null($this->verifier)) {
-            throw new RuntimeException('IPN verifier has not been set.');
+        // cache response object
+        $response = $request->getResponse();
+
+        // cache response values
+        $responseStatus = $response->getStatusCode();
+        $responseBody = $response->getBody();
+
+        // make sure 200 response received
+        if ($responseStatus != 200) {
+            throw new UnexpectedResponseStatusException(sprintf('Unexpected response status: %d received',  $responseStatus));
         }
 
-        $ipnVerificationStatus = $this->verifier->verify();
-
-        if ($executeCallbacks) {
-            $stack = $ipnVerificationStatus ? $this->verifiedIpnCallbackStack : $this->invalidIpnCallbackStack;
-
-            $this->processCallbackStack($stack);
-        }
-
-        return $ipnVerificationStatus;
-    }
-
-    /**
-     * Listen for an IPN and execute callable based on verification status.
-     *
-     * @param Closure      $verifiedIpnCallback
-     * @param Closure|null $invalidIpnCallback
-     */
-    public function listen(Closure $verifiedIpnCallback, Closure $invalidIpnCallback = null)
-    {
-        $this->onVerifiedIpn($verifiedIpnCallback);
-
-        if (!is_null($invalidIpnCallback)) {
-            $this->onInvalidIpn($invalidIpnCallback);
-        }
-
-        $this->processIpn();
-    }
-
-    /**
-     * Execute all callables in a given stack.
-     *
-     * @param array $stack
-     */
-    protected function processCallbackStack($stack)
-    {
-        foreach ($stack as $callback) {
-            $callback();
+        // check the response body
+        if (strpos($responseBody, 'VERIFIED') !== false) {
+            return true;
+        } elseif (strpos($responseBody, 'INVALID') !== false) {
+            return false;
+        } else {
+            throw new UnexpectedResponseBodyException('Unexpected response body received');
         }
     }
 
     /**
-     * Get a text based report of the latest IPN verification request.
+     * Get a text based report on the latest IPN request
      *
      * @return string
-     * @throws RuntimeException
      */
     public function getReport()
     {
@@ -136,56 +84,45 @@ class Listener
         $output = '';
 
         // helpers
-        $dashLine = function ($length = 100) {
+        $dashLine = function($length = 80) {
             $l = '';
             for ($i = 0; $i < $length; $i++) { $l .= '-'; }
 
             return $l;
         };
         $linebreak = "\n";
-        $newline = function ($data) use (&$output, &$linebreak) {
+        $newline = function($data) use (&$output, &$linebreak) {
             $output .= $data . $linebreak;
         };
 
-        // make sure a verifier has been set
-        if (is_null($this->verifier)) {
-            throw new RuntimeException('IPN verifier has not been set.');
-        }
-
-        // cache objects locally for convenience
-        $verifier = $this->verifier;
-        $ipnMessage = $verifier->getIpnMessage();
-        $verificationResponse = $verifier->getVerificationResponse();
+        // cache request + response objects
+        $request = $this->request;
+        $response = $request->getResponse();
 
         // generate report
         $newline($dashLine());
-        $title = sprintf('[%s] - %s (%s)', date('d/m/Y H:i:s'), $verifier->getRequestUri(), ucfirst($verifier->getEnvironment()));
-        $newline($title);
+        $newline('[' . date('d/m/Y H:i:s') . '] - ' . $request->getRequestUri());
         $newline($dashLine() . $linebreak);
 
-        // if a verification request was made
-        if (!is_null($verificationResponse)) {
-            $newline('VERIFICATION RESPONSE STATUS: ');
-            $newline($dashLine(29) . $linebreak);
-            $newline($verificationResponse->getStatusCode() . $linebreak);
+        $newline('RESPONSE STATUS: ');
+        $newline($dashLine(16) . $linebreak);
+        $newline($response->getStatusCode() . $linebreak);
 
-            $newline('VERIFICATION RESPONSE BODY: ');
-            $newline($dashLine(27) . $linebreak);
-            $newline($verificationResponse->getBody() . $linebreak);
+        $newline('RESPONSE BODY: ');
+        $newline($dashLine(14) . $linebreak);
 
-            $newline('VERIFICATION REQUEST POST DATA: ');
-            $newline($dashLine(31) . $linebreak);
+        $newline($response->getBody() . $linebreak);
 
-            $newline($ipnMessage . $linebreak);
+        $newline('RAW POST: ');
+        $newline($dashLine(9) . $linebreak);
 
-            $newline('IPN MESSAGE DATA: ');
-            $newline($dashLine(17) . $linebreak);
+        $newline($request->getEncodedData() . $linebreak);
 
-            foreach ($ipnMessage as $k => $v) {
-                $newline($k . ' = ' . $v);
-            }
-        } else {
-            $newline('VERIFICATION REQUEST NOT MADE');
+        $newline('POST VARIABLES: ');
+        $newline($dashLine(15) . $linebreak);
+
+        foreach ($request->getData() as $k => $v) {
+            $newline($k . ' = ' . $v);
         }
 
         return $output;
